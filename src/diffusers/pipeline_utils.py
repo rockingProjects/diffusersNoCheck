@@ -30,10 +30,8 @@ from PIL import Image
 from tqdm.auto import tqdm
 
 from .configuration_utils import ConfigMixin
-from .modeling_utils import WEIGHTS_NAME
-from .onnx_utils import ONNX_WEIGHTS_NAME
 from .schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
-from .utils import CONFIG_NAME, DIFFUSERS_CACHE, BaseOutput, logging
+from .utils import CONFIG_NAME, DIFFUSERS_CACHE, ONNX_WEIGHTS_NAME, WEIGHTS_NAME, BaseOutput, logging
 
 
 INDEX_FILE = "diffusion_pytorch_model.bin"
@@ -237,13 +235,13 @@ class DiffusionPipeline(ConfigMixin):
 
             kwargs (remaining dictionary of keyword arguments, *optional*):
                 Can be used to overwrite load - and saveable variables - *i.e.* the pipeline components - of the
-                specific pipeline class. The overritten components are then directly passed to the pipelines `__init__`
-                method. See example below for more information.
+                specific pipeline class. The overwritten components are then directly passed to the pipelines
+                `__init__` method. See example below for more information.
 
         <Tip>
 
-        Passing `use_auth_token=True`` is required when you want to use a private model, *e.g.*
-        `"CompVis/stable-diffusion-v1-4"`
+         It is required to be logged in (`huggingface-cli login`) when you want to use private or [gated
+         models](https://huggingface.co/docs/hub/models-gated#gated-models), *e.g.* `"CompVis/stable-diffusion-v1-4"`
 
         </Tip>
 
@@ -265,15 +263,13 @@ class DiffusionPipeline(ConfigMixin):
         >>> # Download pipeline that requires an authorization token
         >>> # For more information on access tokens, please refer to this section
         >>> # of the documentation](https://huggingface.co/docs/hub/security-tokens)
-        >>> pipeline = DiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", use_auth_token=True)
+        >>> pipeline = DiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4")
 
         >>> # Download pipeline, but overwrite scheduler
         >>> from diffusers import LMSDiscreteScheduler
 
         >>> scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear")
-        >>> pipeline = DiffusionPipeline.from_pretrained(
-        ...     "CompVis/stable-diffusion-v1-4", scheduler=scheduler, use_auth_token=True
-        ... )
+        >>> pipeline = DiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", scheduler=scheduler)
         ```
         """
         cache_dir = kwargs.pop("cache_dir", DIFFUSERS_CACHE)
@@ -284,6 +280,7 @@ class DiffusionPipeline(ConfigMixin):
         revision = kwargs.pop("revision", None)
         torch_dtype = kwargs.pop("torch_dtype", None)
         provider = kwargs.pop("provider", None)
+        sess_options = kwargs.pop("sess_options", None)
 
         # 1. Download the checkpoints and configs
         # use snapshot download here to get it working from from_pretrained
@@ -341,6 +338,10 @@ class DiffusionPipeline(ConfigMixin):
 
         # 3. Load each module in the pipeline
         for name, (library_name, class_name) in init_dict.items():
+            # 3.1 - now that JAX/Flax is an official framework of the library, we might load from Flax names
+            if class_name.startswith("Flax"):
+                class_name = class_name[4:]
+
             is_pipeline_module = hasattr(pipelines, library_name)
             loaded_sub_model = None
 
@@ -396,6 +397,7 @@ class DiffusionPipeline(ConfigMixin):
                     loading_kwargs["torch_dtype"] = torch_dtype
                 if issubclass(class_obj, diffusers.OnnxRuntimeModel):
                     loading_kwargs["provider"] = provider
+                    loading_kwargs["sess_options"] = sess_options
 
                 # check if the module is in a subdirectory
                 if os.path.isdir(os.path.join(cached_folder, name)):
